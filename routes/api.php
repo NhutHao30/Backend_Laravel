@@ -2,35 +2,45 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\ProductController;
-use App\Http\Controllers\Api\CartController;
+use App\Http\Controllers\Api\AdminController;
 
 // ==========================================
-// PUBLIC API (NO LOGIN REQUIRED)
+// 🔓 API CÔNG KHAI
 // ==========================================
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/register', [AuthController::class, 'register']);
-Route::get('/products', [ProductController::class, 'index']); // See list of products
-Route::get('/products/{id}', [ProductController::class, 'show']); // See product details
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
+Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
 // ==========================================
-// SECURE API (JWT TOKEN MUST BE ATTACHED)
+// 🔒 API BẢO MẬT (ĐÃ ĐĂNG NHẬP)
 // ==========================================
-Route::group(['middleware' => 'auth:api'], function () {
-    
-    // Member 1: Auth
+Route::middleware(['auth:api'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/me', [AuthController::class, 'me']); // Retrieve current user information
-    
-    // Member 3: Cart
-    Route::get('/cart', [CartController::class, 'getCart']);
-    Route::post('/cart/add', [CartController::class, 'addToCart']);
-    
-    // Các bạn tự thêm Route của mình vào đây, Viết code và comment bằng tiếng Anh, làm xong đẩy lên github với branch của mình,
-    // mỗi branch nên là 1 tính năng sau khi xong tính năng nào thì xóa branch luôn cũng được
-    // Gitflow:
-    // Branch main: Code sạch, dùng để deploy.
-    // Branch develop: Code đang phát triển chung của nhóm.
-    // đặt tên branch theo quy tắt sau: feature/author/feature-name: Nhánh riêng của từng bạn (ví dụ: feature/NhutHao/login-api).
-    // Commit Message: [Type] Message (Ví dụ: Fix - resolve login bug, Add - Minio upload service, Feat - ....).
+    Route::post('/refresh', [AuthController::class, 'refresh']);
+    Route::get('/me', [AuthController::class, 'me']);
+
+    // ==========================================
+    // 👑 API DÀNH CHO ADMIN (Quyền = 0)
+    // ==========================================
+    Route::middleware(['role:0'])->group(function () {
+        Route::get('/admin/users', [AdminController::class, 'listUsers']);
+        Route::post('/admin/staff', [AdminController::class, 'createStaff']);
+        Route::get('/admin/promote-customer/{makh}', [AdminController::class, 'promoteCustomer']);
+        // Các logic khác của Admin...
+    });
+
+    // ==========================================
+    // 👥 API DÀNH CHO NHÂN VIÊN (Quyền = 1)
+    // ==========================================
+    Route::middleware(['role:1,0'])->group(function () {
+        // Chỉ Nhân viên hoặc Admin mới gọi được API ở đây
+    });
+
+    // ==========================================
+    // 🛒 API DÀNH CHO KHÁCH HÀNG (Quyền = 2)
+    // ==========================================
+    Route::middleware(['role:2'])->group(function () {
+        // Mua hàng, xem giỏ hàng...
+    });
 });
