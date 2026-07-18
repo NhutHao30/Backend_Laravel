@@ -26,11 +26,11 @@ class SendOtpEmailJob implements ShouldQueue
     }
 
     /**
-     * Execute the job. (Worker sẽ chạy hàm này)
+     * Execute the job. (The worker will run this function)
      */
     public function handle(): void
     {
-        // Gửi email thật (Yêu cầu cấu hình MAIL_ trong .env)
+        // Send real emails (Requires configuring MAIL_ in .env)
         Mail::raw("Mã OTP lấy lại mật khẩu của bạn là: {$this->otpCode}", function ($message) {
             $message->to($this->email)
                     ->subject('Yêu cầu cấp lại mật khẩu - Dola Bakery');

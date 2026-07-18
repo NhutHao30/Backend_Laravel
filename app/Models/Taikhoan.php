@@ -44,6 +44,11 @@ class TaiKhoan extends Authenticatable implements JWTSubject
         return $this->getKey();
     }
 
+    public function getAuthPassword()
+    {
+        return $this->PASSWORD;
+    }
+
     public function getJWTCustomClaims()
     {
         return [
