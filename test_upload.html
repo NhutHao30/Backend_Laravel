@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Test Upload MinIO</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        input { margin-bottom: 10px; padding: 5px; width: 300px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        pre { background: #f4f4f4; padding: 15px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h2>🚀 Tool Test Upload Sản Phẩm (Bỏ qua Thunder Client)</h2>
+    <p>Nhập thông tin và chọn ảnh để test trực tiếp từ trình duyệt web vào Server Laravel.</p>
+    
+    <form id="uploadForm">
+        <label>Mã Sản Phẩm:</label><br>
+        <input type="text" name="MASP" value="SP999"><br>
+
+        <label>Mã Loại (Phải có thật trong DB):</label><br>
+        <input type="text" name="MALOAI" value="LSP001"><br>
+
+        <label>Tên Sản Phẩm:</label><br>
+        <input type="text" name="TENSP" value="Bánh Kem Dâu Tây"><br>
+
+        <label>Giá Bán:</label><br>
+        <input type="number" name="GIABAN" value="150000"><br>
+
+        <label>Đơn Vị Tính:</label><br>
+        <input type="text" name="DVT" value="Cái"><br>
+
+        <label>Hình Ảnh (.jpg, .png, .webp):</label><br>
+        <input type="file" name="HINHANH" accept="image/*" required><br><br>
+
+        <label>Token Admin (Dán token vào đây, nhớ giữ nguyên chữ Bearer ở đầu):</label><br>
+        <input type="text" id="token" style="width: 500px;" placeholder="Bearer eyJ0..."><br><br>
+
+        <button type="submit">GỬI LÊN SERVER</button>
+    </form>
+
+    <h3>Kết quả trả về từ Server:</h3>
+    <pre id="result">Chưa có kết quả...</pre>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const formData = new FormData(form);
+            const token = document.getElementById('token').value;
+
+            if (!token) {
+                alert("Vui lòng dán Token vào!");
+                return;
+            }
+
+            document.getElementById('result').textContent = "⏳ Đang gửi dữ liệu lên server...";
+
+            try {
+                const response = await fetch('http://127.0.0.1:8000/api/admin/products', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': token,
+                        'Accept': 'application/json'
+                        // KHÔNG set Content-Type, fetch sẽ tự động sinh boundary cho multipart/form-data
+                    },
+                    body: formData
+                });
+                
+                const data = await response.json();
+                document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+                
+                if (response.ok) {
+                    alert("🎉 Chúc mừng! Đã tải ảnh lên MinIO thành công!");
+                }
+            } catch (err) {
+                document.getElementById('result').textContent = "Lỗi kết nối: " + err.message;
+            }
+        });
+    </script>
+</body>
+</html>

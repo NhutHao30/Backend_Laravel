@@ -19,10 +19,15 @@ class AuthController extends Controller
      */
     public function login(Request $request)
     {
-        $credentials = $request->validate([
+        $request->validate([
             'USERNAME' => 'required|string',
             'PASSWORD' => 'required|string',
         ]);
+
+        $credentials = [
+            'USERNAME' => $request->USERNAME,
+            'password' => $request->PASSWORD,
+        ];
 
         /** @var \Tymon\JWTAuth\JWTGuard $guard */
         $guard = Auth::guard('api');
@@ -120,7 +125,7 @@ class AuthController extends Controller
     }
 
     /**
-     * API Quên mật khẩu - Gửi OTP
+     * API Forgot Password - Send OTP
      */
     public function forgotPassword(Request $request)
     {
@@ -131,21 +136,21 @@ class AuthController extends Controller
             return response()->json(['error' => 'Email không tồn tại trong hệ thống'], 404);
         }
 
-        // Tạo OTP 6 số
+        // Generate a 6-digit OTP.
         $otp = rand(100000, 999999);
         $user->update([
             'OTP_CODE' => $otp,
             'OTP_EXPIRES_AT' => Carbon::now()->addMinutes(15)
         ]);
 
-        // Đẩy Job vào RabbitMQ
+        // Push Jobs into RabbitMQ
         SendOtpEmailJob::dispatch($user->EMAIL, $otp);
 
         return response()->json(['message' => 'Mã OTP đã được đưa vào hàng đợi để gửi đến email của bạn']);
     }
 
     /**
-     * API Đặt lại mật khẩu với OTP
+     * API Reset password with OTP
      */
     public function resetPassword(Request $request)
     {
@@ -165,7 +170,7 @@ class AuthController extends Controller
             return response()->json(['error' => 'Mã OTP đã hết hạn'], 400);
         }
 
-        // Cập nhật mật khẩu mới và xóa OTP
+        // Update your password and delete the OTP.
         $user->update([
             'PASSWORD' => $request->NEW_PASSWORD,
             'OTP_CODE' => null,

@@ -57,7 +57,7 @@ class AdminController extends Controller
         }
     }
     /**
-     * Logic phân hạng khách hàng dựa trên điểm tích lũy
+     * Customer ranking logic based on accumulated points.
      */
     public function promoteCustomer($makh)
     {
