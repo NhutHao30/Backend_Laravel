@@ -59,9 +59,29 @@ class OrderController extends Controller
                     'SOLUONG' => $item['quantity'],
                     'DONGIA' => $item['price'],
                 ]);
+                
+                // Trừ tồn kho thủ công (không dựa vào Trigger nữa để đảm bảo chính xác)
+                $sp = \App\Models\SanPham::find($item['id']);
+                if ($sp) {
+                    $sp->SOLUONG -= $item['quantity'];
+                    $sp->save();
+                }
+            }
+            
+            // Tích điểm cho khách hàng (Nếu không phải Khách vãng lai)
+            if ($makh !== 'KH000000') {
+                $khachHang = \App\Models\KhachHang::find($makh);
+                if ($khachHang) {
+                    $diemCong = floor($total / 10000); // 10k = 1 điểm
+                    $khachHang->DIEMTICHLUY += $diemCong;
+                    $khachHang->save();
+                }
             }
 
             \Illuminate\Support\Facades\DB::commit();
+            
+            // Xóa cache vì tồn kho đã thay đổi
+            \Illuminate\Support\Facades\Cache::tags(['products'])->flush();
 
             return response()->json([
                 'message' => 'Thanh toán thành công',
@@ -148,9 +168,122 @@ class OrderController extends Controller
         if (!$invoice) return response()->json(['message' => 'Not found'], 404);
 
         if ($request->has('trangThai')) {
-            $invoice->TRANGTHAITHANHTOAN = $request->trangThai;
+            $newStatus = $request->trangThai;
+            
+            // Nếu trạng thái là Đã duyệt/Đang giao và chưa có mã vận đơn GHN, thì đẩy sang GHN
+            if (in_array($newStatus, ['Đã duyệt', 'Đang giao', 'Đã xác nhận']) && empty($invoice->MAVANDON)) {
+                
+                // Parse ward_code and district_id from GHICHU
+                $wardCode = null;
+                $districtId = null;
+                if (preg_match('/\[GHN_WARD:(.*?),GHN_DIST:(.*?)\]/', $invoice->GHICHU, $matches)) {
+                    $wardCode = $matches[1];
+                    $districtId = (int) $matches[2];
+                }
+
+                if ($wardCode && $districtId) {
+                    // Tách địa chỉ hiển thị khỏi chuỗi GHICHU
+                    $addressDisplay = preg_replace('/\[GHN_WARD:.*?\]/', '', $invoice->GHICHU);
+
+                    // Đẩy job tạo đơn vào hàng đợi
+                    \App\Jobs\PushOrderToGhnJob::dispatch($id, $wardCode, $districtId, $addressDisplay);
+                }
+            }
+
+            // Logic Hủy đơn hàng và hoàn kho
+            if ($newStatus === 'Đã hủy' && $invoice->TRANGTHAITHANHTOAN !== 'Đã hủy') {
+                // 1. Hoàn lại số lượng tồn kho
+                $items = \App\Models\ChiTietHdBan::where('MAHD', $id)->get();
+                foreach ($items as $item) {
+                    $sp = \App\Models\SanPham::find($item->MASP);
+                    if ($sp) {
+                        $sp->SOLUONG += $item->SOLUONG;
+                        $sp->save();
+                    }
+                }
+                
+                // Xóa cache vì tồn kho đã thay đổi
+                \Illuminate\Support\Facades\Cache::tags(['products'])->flush();
+
+                // 2. Hủy đơn trên GHN nếu đã có mã vận đơn
+                if (!empty($invoice->MAVANDON) && $invoice->DonViVanChuyen === 'Giao Hàng Nhanh') {
+                    \App\Jobs\CancelOrderOnGhnJob::dispatch($invoice->MAVANDON);
+                }
+            }
+
+            $invoice->TRANGTHAITHANHTOAN = $newStatus;
             $invoice->save();
         }
-        return response()->json(['message' => 'Cập nhật thành công']);
+        return response()->json(['message' => 'Cập nhật thành công', 'mavandon' => $invoice->MAVANDON]);
+    }
+
+    /**
+     * Customer: Xem danh sách đơn hàng của mình
+     */
+    public function myOrders()
+    {
+        $user = \Illuminate\Support\Facades\Auth::guard('api')->user();
+        if (!$user || $user->MAROLE != 2) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+        $khachHang = \App\Models\KhachHang::where('USERNAME', $user->USERNAME)->first();
+        if (!$khachHang) {
+            return response()->json(['content' => []]);
+        }
+
+        $orders = \App\Models\HdBan::where('MAKH', $khachHang->MAKH)
+            ->orderBy('NGAYLAP', 'desc')
+            ->get();
+            
+        // Map data để Frontend dễ dùng (giống cấu trúc cũ)
+        $mapped = $orders->map(function ($order) {
+            return [
+                'maHD' => $order->MAHD,
+                'ngayLap' => $order->NGAYLAP,
+                'tongTien' => $order->TONGTIEN,
+                'hinhThucThanhToan' => $order->PHUONGTHUCTHANHTOAN,
+                'trangThai' => $order->TRANGTHAITHANHTOAN,
+                'diaChiGiao' => $order->GHICHU,
+                'maVanDon' => $order->MAVANDON
+            ];
+        });
+
+        return response()->json(['content' => $mapped]);
+    }
+
+    /**
+     * Customer: Xem chi tiết đơn hàng của mình
+     */
+    public function getMyOrderDetails($id)
+    {
+        $user = \Illuminate\Support\Facades\Auth::guard('api')->user();
+        if (!$user || $user->MAROLE != 2) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+        $khachHang = \App\Models\KhachHang::where('USERNAME', $user->USERNAME)->first();
+        if (!$khachHang) {
+            return response()->json(['error' => 'Không tìm thấy KH'], 404);
+        }
+
+        $order = \App\Models\HdBan::where('MAHD', $id)->where('MAKH', $khachHang->MAKH)->first();
+        if (!$order) {
+            return response()->json(['error' => 'Không tìm thấy đơn hàng'], 404);
+        }
+
+        $details = \App\Models\ChiTietHdBan::with('sanpham')->where('MAHD', $id)->get();
+        
+        $mapped = $details->map(function ($detail) {
+            return [
+                'maHD' => $detail->MAHD,
+                'maSP' => $detail->MASP,
+                'tenSP' => $detail->sanpham ? $detail->sanpham->TENSP : 'Sản phẩm đã bị xóa',
+                'hinhAnh' => $detail->sanpham ? $detail->sanpham->HINHANH : null,
+                'soLuong' => $detail->SOLUONG,
+                'donGia' => $detail->DONGIA,
+                'thanhTien' => $detail->SOLUONG * $detail->DONGIA
+            ];
+        });
+
+        return response()->json($mapped);
     }
 }

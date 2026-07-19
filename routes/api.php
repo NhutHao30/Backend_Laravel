@@ -13,6 +13,13 @@ Route::post('/register', [AuthController::class, 'register']);
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
+// Giao Hàng Nhanh (GHN) API Proxy
+Route::get('/ghn/provinces', [\App\Http\Controllers\Api\GhnController::class, 'getProvinces']);
+Route::get('/ghn/districts', [\App\Http\Controllers\Api\GhnController::class, 'getDistricts']);
+Route::get('/ghn/wards', [\App\Http\Controllers\Api\GhnController::class, 'getWards']);
+Route::post('/ghn/fee', [\App\Http\Controllers\Api\GhnController::class, 'calculateFee']);
+Route::post('/ghn/webhook', [\App\Http\Controllers\Api\GhnController::class, 'webhook']);
+
 Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/products', [ProductController::class, 'index']);
 Route::get('/products/{id}', [ProductController::class, 'show']);
@@ -64,5 +71,14 @@ Route::middleware(['auth:api'])->group(function () {
     // ==========================================
     Route::middleware(['role:2'])->group(function () {
         // Mua hàng, xem giỏ hàng...
+        Route::get('/cart', [\App\Http\Controllers\Api\CartController::class, 'index']);
+        Route::post('/cart/add', [\App\Http\Controllers\Api\CartController::class, 'add']);
+        Route::put('/cart/update', [\App\Http\Controllers\Api\CartController::class, 'updateQuantity']);
+        Route::delete('/cart/remove/{masp}', [\App\Http\Controllers\Api\CartController::class, 'remove']);
+        Route::post('/cart/checkout', [\App\Http\Controllers\Api\CartController::class, 'checkoutOnline']);
+
+        // Xem đơn hàng của tôi
+        Route::get('/my-orders', [\App\Http\Controllers\Api\OrderController::class, 'myOrders']);
+        Route::get('/my-orders/{id}/chi-tiet', [\App\Http\Controllers\Api\OrderController::class, 'getMyOrderDetails']);
     });
 });

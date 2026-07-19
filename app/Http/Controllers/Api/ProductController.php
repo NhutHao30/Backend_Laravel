@@ -61,13 +61,21 @@ class ProductController extends Controller
             $query->orderBy('MASP', 'desc');
         }
 
-        // Paginate 12 products per page.
-        $products = $query->paginate(12);
+        // Caching: Tạo cache key dựa trên tất cả các tham số query
+        $cacheKey = 'products_' . md5(serialize($request->all()));
 
-        // Calculate the actual inventory for each returned product.
-        $products->getCollection()->transform(function ($product) {
-            $product->setAttribute('TONKHO_THUCTE', $this->calculateStock($product->MASP));
-            return $product;
+        $products = \Illuminate\Support\Facades\Cache::tags(['products'])->remember($cacheKey, 600, function () use ($query) {
+            // Paginate 12 products per page.
+            $paginated = $query->paginate(12);
+
+            // Calculate the actual inventory for each returned product.
+            $paginated->getCollection()->transform(function ($product) {
+                $product->setAttribute('TONKHO_THUCTE', $this->calculateStock($product->MASP));
+                return $product;
+            });
+
+            // Quan trọng: Phải chuyển thành Array trước khi lưu vào Redis để tránh lỗi Serialize Object của PHP
+            return $paginated->toArray();
         });
 
         return response()->json($products);
@@ -117,6 +125,8 @@ class ProductController extends Controller
             'SOLUONG' => $request->input('SOLUONG', 0) // Get the quantity from the form, the default is 0.
         ]);
 
+        \Illuminate\Support\Facades\Cache::tags(['products'])->flush();
+
         return response()->json(['message' => 'Thêm sản phẩm thành công', 'data' => $product], 201);
     }
 
@@ -150,6 +160,8 @@ class ProductController extends Controller
 
         $product->update($dataUpdate);
 
+        \Illuminate\Support\Facades\Cache::tags(['products'])->flush();
+
         return response()->json(['message' => 'Cập nhật sản phẩm thành công', 'data' => $product]);
     }
 
@@ -174,28 +186,19 @@ class ProductController extends Controller
             // Use the DB facade to perform a permanent (force delete) deletion, bypassing SoftDeletes.
             \Illuminate\Support\Facades\DB::table('sanpham')->where('MASP', $id)->delete();
 
+            \Illuminate\Support\Facades\Cache::tags(['products'])->flush();
+
             return response()->json(['message' => 'Đã xóa vĩnh viễn sản phẩm và các dữ liệu liên quan']);
         } catch (\Exception $e) {
             return response()->json(['message' => 'Lỗi khi xóa: ' . $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Internal function: Calculates the actual inventory of the product.
-     * Inventory = Total Imports (SOLUONGTN) - Total Sales (SOLUONG)
-     */
     public function calculateStock($masp)
     {
-        // Calculate the total quantity of goods received.
-        $tongNhap = ChiTietHdNhap::where('MASP', $masp)->sum('SOLUONGTN');
-        
-        // Calculate the total quantity sold (temporarily including all items, even those yet to be paid for, to deduct from inventory).
-        $tongBan = ChiTietHdBan::where('MASP', $masp)->sum('SOLUONG');
-
-        // Initial (base) declared quantity
         $sanPham = SanPham::find($masp);
-        $soLuongBanDau = $sanPham ? $sanPham->SOLUONG : 0;
-
-        return $soLuongBanDau + $tongNhap - $tongBan;
+        // Vì hiện tại ta đã tự động trừ/cộng trực tiếp vào cột SOLUONG của bảng SanPham khi mua/hủy hàng,
+        // nên cột SOLUONG chính là tồn kho thực tế hiện tại. Không cần phải query từ bảng hóa đơn nữa.
+        return $sanPham ? $sanPham->SOLUONG : 0;
     }
 }
