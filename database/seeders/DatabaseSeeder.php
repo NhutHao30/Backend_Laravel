@@ -126,5 +126,8 @@ class DatabaseSeeder extends Seeder
             ['MATINTUC' => 'TT02', 'BOCUC' => 'Kết cấu ngàn lớp độc đáo', 'ARTICLE' => 'Bánh sừng bò (Croissant) là niềm tự hào của ẩm thực Pháp.', 'HINHANH' => 'post_img-2.webp', 'created_at' => $now, 'updated_at' => $now],
             ['MATINTUC' => 'TT03', 'BOCUC' => 'Món quà từ Hong Kong', 'ARTICLE' => 'Tart trứng Hong Kong sở hữu lớp vỏ bánh quy giòn tan.', 'HINHANH' => 'post_img-3.webp', 'created_at' => $now, 'updated_at' => $now],
         ]);
+
+        // 8. Chạy seeder khách hàng
+        $this->call(CustomerSeeder::class);
     }
 }

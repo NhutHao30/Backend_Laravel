@@ -40,6 +40,16 @@ class OrderController extends Controller
                 $makh = $defaultKhach->MAKH;
             }
 
+            // Xác định chi nhánh lập hóa đơn dựa trên nhân viên đang đăng nhập
+            $maCuaHang = 1; // Mặc định là chi nhánh trung tâm
+            $user = \Illuminate\Support\Facades\Auth::guard('api')->user();
+            if ($user && in_array($user->MAROLE, [0, 1, 2])) { // Admin, Branch Manager, Staff
+                $nhanVien = \App\Models\NhanVien::where('USERNAME', $user->USERNAME)->first();
+                if ($nhanVien && $nhanVien->MACUAHANG) {
+                    $maCuaHang = $nhanVien->MACUAHANG;
+                }
+            }
+
             \App\Models\HdBan::create([
                 'MAHD' => $mahd,
                 'NGAYLAP' => now(),
@@ -49,6 +59,7 @@ class OrderController extends Controller
                 'GHICHU' => 'Khách mua tại quầy (POS)',
                 'MAKH' => $makh,
                 'MAVANDON' => null,
+                'MACUAHANG' => $maCuaHang,
             ]);
 
             // Save Sales Invoice Details
@@ -60,7 +71,17 @@ class OrderController extends Controller
                     'DONGIA' => $item['price'],
                 ]);
                 
-                // Trừ tồn kho thủ công (không dựa vào Trigger nữa để đảm bảo chính xác)
+                // Trừ tồn kho tại cửa hàng hiện tại
+                $tonKho = \App\Models\TonKhoCuaHang::where('MACUAHANG', $maCuaHang)
+                            ->where('MASP', $item['id'])->first();
+                if ($tonKho) {
+                    \Illuminate\Support\Facades\DB::table('tonkho_cuahang')
+                        ->where('MACUAHANG', $maCuaHang)
+                        ->where('MASP', $item['id'])
+                        ->update(['SOLUONG_TON' => $tonKho->SOLUONG_TON - $item['quantity']]);
+                }
+
+                // Trừ tồn kho thủ công (bảng sanpham) để tương thích ngược
                 $sp = \App\Models\SanPham::find($item['id']);
                 if ($sp) {
                     $sp->SOLUONG -= $item['quantity'];
@@ -97,7 +118,7 @@ class OrderController extends Controller
     // Get the list of invoices
     public function index(Request $request)
     {
-        $query = \App\Models\HdBan::with('khachhang');
+        $query = \App\Models\HdBan::with(['khachhang', 'cuahang']);
 
         if ($request->has('search') && !empty($request->search)) {
             $search = $request->search;
@@ -115,6 +136,15 @@ class OrderController extends Controller
             $query->where('MAKH', $request->maKH);
         }
 
+        // Nếu là Quản lý chi nhánh (Role 1) hoặc Nhân viên (Role 2), chỉ hiển thị hóa đơn của chi nhánh đó
+        $user = \Illuminate\Support\Facades\Auth::guard('api')->user();
+        if ($user && in_array($user->MAROLE, [1, 2])) {
+            $nhanVien = \App\Models\NhanVien::where('USERNAME', $user->USERNAME)->first();
+            if ($nhanVien && $nhanVien->MACUAHANG) {
+                $query->where('MACUAHANG', $nhanVien->MACUAHANG);
+            }
+        }
+
         $size = $request->input('size', 100);
         $invoices = $query->orderBy('NGAYLAP', 'desc')->paginate($size);
 
@@ -129,7 +159,8 @@ class OrderController extends Controller
                 'donViVanChuyen' => $invoice->DonViVanChuyen,
                 'maVanDon' => $invoice->MAVANDON,
                 'maKH' => $invoice->MAKH,
-                'hoTenKH' => $invoice->khachhang ? $invoice->khachhang->HOTEN : 'Khách vãng lai'
+                'hoTenKH' => $invoice->khachhang ? $invoice->khachhang->HOTEN : 'Khách vãng lai',
+                'tenCuaHang' => $invoice->cuahang ? $invoice->cuahang->TENCUAHANG : 'Không rõ'
             ];
         });
 
@@ -166,6 +197,11 @@ class OrderController extends Controller
     {
         $invoice = \App\Models\HdBan::find($id);
         if (!$invoice) return response()->json(['message' => 'Not found'], 404);
+        
+        // Không cho phép cập nhật nếu đơn hàng đã hoàn thành hoặc đã hủy
+        if (in_array($invoice->TRANGTHAITHANHTOAN, ['Đã hoàn thành', 'Đã hủy'])) {
+            return response()->json(['message' => 'Không thể thay đổi trạng thái của đơn hàng Đã hoàn thành hoặc Đã hủy'], 400);
+        }
 
         if ($request->has('trangThai')) {
             $newStatus = $request->trangThai;
@@ -192,9 +228,40 @@ class OrderController extends Controller
 
             // Logic Hủy đơn hàng và hoàn kho
             if ($newStatus === 'Đã hủy' && $invoice->TRANGTHAITHANHTOAN !== 'Đã hủy') {
+                
+                // Nếu đơn hàng đã đẩy sang GHN, phải Hủy trên GHN
+                if (!empty($invoice->MAVANDON)) {
+                    $shopId = env('GHN_SHOP_ID');
+                    if ($invoice->MACUAHANG) {
+                        $cuaHang = \App\Models\CuaHang::find($invoice->MACUAHANG);
+                        if ($cuaHang && $cuaHang->GHN_SHOP_ID) {
+                            $shopId = $cuaHang->GHN_SHOP_ID;
+                        }
+                    }
+                    try {
+                        \Illuminate\Support\Facades\Http::withoutVerifying()->withHeaders([
+                            'Token' => env('GHN_API_TOKEN'),
+                            'ShopId' => (int)$shopId
+                        ])->post('https://online-gateway.ghn.vn/shiip/public-api/v2/switch-status/cancel', [
+                            'order_codes' => [$invoice->MAVANDON]
+                        ]);
+                    } catch (\Exception $e) {
+                        // Bỏ qua lỗi nếu không hủy được trên GHN
+                    }
+                }
+
                 // 1. Hoàn lại số lượng tồn kho
                 $items = \App\Models\ChiTietHdBan::where('MAHD', $id)->get();
                 foreach ($items as $item) {
+                    $tonKho = \App\Models\TonKhoCuaHang::where('MACUAHANG', $invoice->MACUAHANG)
+                                ->where('MASP', $item->MASP)->first();
+                    if ($tonKho) {
+                        \Illuminate\Support\Facades\DB::table('tonkho_cuahang')
+                            ->where('MACUAHANG', $invoice->MACUAHANG)
+                            ->where('MASP', $item->MASP)
+                            ->update(['SOLUONG_TON' => $tonKho->SOLUONG_TON + $item->SOLUONG]);
+                    }
+
                     $sp = \App\Models\SanPham::find($item->MASP);
                     if ($sp) {
                         $sp->SOLUONG += $item->SOLUONG;
@@ -223,7 +290,7 @@ class OrderController extends Controller
     public function myOrders()
     {
         $user = \Illuminate\Support\Facades\Auth::guard('api')->user();
-        if (!$user || $user->MAROLE != 2) {
+        if (!$user || $user->MAROLE != 3) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
         $khachHang = \App\Models\KhachHang::where('USERNAME', $user->USERNAME)->first();
@@ -257,7 +324,7 @@ class OrderController extends Controller
     public function getMyOrderDetails($id)
     {
         $user = \Illuminate\Support\Facades\Auth::guard('api')->user();
-        if (!$user || $user->MAROLE != 2) {
+        if (!$user || $user->MAROLE != 3) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
         $khachHang = \App\Models\KhachHang::where('USERNAME', $user->USERNAME)->first();

@@ -36,6 +36,15 @@ class AuthController extends Controller
             return response()->json(['error' => 'Tài khoản hoặc mật khẩu không chính xác'], 401);
         }
 
+        $user = Auth::guard('api')->user();
+        if ($user->MAROLE == 1 || $user->MAROLE == 0 || $user->MAROLE == 2) {
+            $nhanVien = \App\Models\NhanVien::where('USERNAME', $user->USERNAME)->first();
+            if ($nhanVien && $nhanVien->TRANGTHAI === 'Nghỉ việc') {
+                $guard->logout();
+                return response()->json(['error' => 'Tài khoản của bạn đã bị vô hiệu hóa'], 403);
+            }
+        }
+
         return $this->respondWithToken($token);
     }
 
@@ -58,7 +67,7 @@ class AuthController extends Controller
             $taikhoan = TaiKhoan::create([
                 'USERNAME' => $request->USERNAME,
                 'PASSWORD' => $request->PASSWORD,
-                'MAROLE'   => 2,
+                'MAROLE'   => 3, // 3: Customer
                 'EMAIL'    => $request->EMAIL,
             ]);
 
@@ -92,7 +101,7 @@ class AuthController extends Controller
         /** @var \App\Models\TaiKhoan $user */
         $user = Auth::guard('api')->user();
         
-        if ($user->MAROLE == 2) {
+        if ($user->MAROLE == 3) {
             $user->load('khachhang');
         } else {
             $user->load('nhanvien');

@@ -61,16 +61,26 @@ class ProductController extends Controller
             $query->orderBy('MASP', 'desc');
         }
 
-        // Caching: Tạo cache key dựa trên tất cả các tham số query
-        $cacheKey = 'products_' . md5(serialize($request->all()));
+        // Lấy cửa hàng của nhân viên/quản lý đang đăng nhập
+        $maCuaHang = null;
+        $user = \Illuminate\Support\Facades\Auth::guard('api')->user();
+        if ($user && in_array($user->MAROLE, [0, 1, 2])) {
+            $nhanVien = \App\Models\NhanVien::where('USERNAME', $user->USERNAME)->first();
+            if ($nhanVien && $nhanVien->MACUAHANG) {
+                $maCuaHang = $nhanVien->MACUAHANG;
+            }
+        }
 
-        $products = \Illuminate\Support\Facades\Cache::tags(['products'])->remember($cacheKey, 600, function () use ($query) {
+        // Caching: Tạo cache key dựa trên tất cả các tham số query và mã cửa hàng
+        $cacheKey = 'products_' . md5(serialize($request->all())) . '_store_' . $maCuaHang;
+
+        $products = \Illuminate\Support\Facades\Cache::tags(['products'])->remember($cacheKey, 600, function () use ($query, $maCuaHang) {
             // Paginate 12 products per page.
             $paginated = $query->paginate(12);
 
             // Calculate the actual inventory for each returned product.
-            $paginated->getCollection()->transform(function ($product) {
-                $product->setAttribute('TONKHO_THUCTE', $this->calculateStock($product->MASP));
+            $paginated->getCollection()->transform(function ($product) use ($maCuaHang) {
+                $product->setAttribute('TONKHO_THUCTE', $this->calculateStock($product->MASP, $maCuaHang));
                 return $product;
             });
 
@@ -90,7 +100,16 @@ class ProductController extends Controller
         $product = SanPham::with(['loaisanpham'])->find($id);
         if (!$product) return response()->json(['error' => 'Không tìm thấy sản phẩm'], 404);
 
-        $product->setAttribute('TONKHO_THUCTE', $this->calculateStock($product->MASP));
+        $maCuaHang = null;
+        $user = \Illuminate\Support\Facades\Auth::guard('api')->user();
+        if ($user && in_array($user->MAROLE, [0, 1, 2])) {
+            $nhanVien = \App\Models\NhanVien::where('USERNAME', $user->USERNAME)->first();
+            if ($nhanVien && $nhanVien->MACUAHANG) {
+                $maCuaHang = $nhanVien->MACUAHANG;
+            }
+        }
+
+        $product->setAttribute('TONKHO_THUCTE', $this->calculateStock($product->MASP, $maCuaHang));
         
         return response()->json($product);
     }
@@ -148,7 +167,7 @@ class ProductController extends Controller
             'HINHANH' => 'nullable|image|mimes:jpeg,png,jpg,webp|max:2048'
         ]);
 
-        $dataUpdate = $request->except('HINHANH');
+        $dataUpdate = $request->except('HINHANH', 'SOLUONG');
 
         // If you upload new photos
         if ($request->hasFile('HINHANH')) {
@@ -159,6 +178,37 @@ class ProductController extends Controller
         }
 
         $product->update($dataUpdate);
+
+        // Cập nhật tồn kho chi nhánh
+        if ($request->has('SOLUONG')) {
+            $maCuaHang = 1;
+            $user = \Illuminate\Support\Facades\Auth::guard('api')->user();
+            if ($user && in_array($user->MAROLE, [0, 1, 2])) {
+                $nhanVien = \App\Models\NhanVien::where('USERNAME', $user->USERNAME)->first();
+                if ($nhanVien && $nhanVien->MACUAHANG) {
+                    $maCuaHang = $nhanVien->MACUAHANG;
+                }
+            }
+            // Do bảng TonKhoCuaHang không có khóa chính đơn (composite key), 
+            // nên không thể dùng phương thức update() của Eloquent Model, sẽ làm cập nhật toàn bộ bảng.
+            // Phải dùng Query Builder:
+            $exists = \Illuminate\Support\Facades\DB::table('tonkho_cuahang')
+                        ->where('MACUAHANG', $maCuaHang)
+                        ->where('MASP', $id)
+                        ->exists();
+            if ($exists) {
+                \Illuminate\Support\Facades\DB::table('tonkho_cuahang')
+                    ->where('MACUAHANG', $maCuaHang)
+                    ->where('MASP', $id)
+                    ->update(['SOLUONG_TON' => $request->SOLUONG]);
+            } else {
+                \Illuminate\Support\Facades\DB::table('tonkho_cuahang')->insert([
+                    'MACUAHANG' => $maCuaHang,
+                    'MASP' => $id,
+                    'SOLUONG_TON' => $request->SOLUONG
+                ]);
+            }
+        }
 
         \Illuminate\Support\Facades\Cache::tags(['products'])->flush();
 
@@ -194,11 +244,17 @@ class ProductController extends Controller
         }
     }
 
-    public function calculateStock($masp)
+    public function calculateStock($masp, $maCuaHang = null)
     {
-        $sanPham = SanPham::find($masp);
-        // Vì hiện tại ta đã tự động trừ/cộng trực tiếp vào cột SOLUONG của bảng SanPham khi mua/hủy hàng,
-        // nên cột SOLUONG chính là tồn kho thực tế hiện tại. Không cần phải query từ bảng hóa đơn nữa.
-        return $sanPham ? $sanPham->SOLUONG : 0;
+        if ($maCuaHang) {
+            $tonKho = \App\Models\TonKhoCuaHang::where('MASP', $masp)->where('MACUAHANG', $maCuaHang)->first();
+            return $tonKho ? $tonKho->SOLUONG_TON : 0;
+        }
+
+        // Đối với khách hàng mua online (không có $maCuaHang cụ thể),
+        // Số lượng tồn kho lớn nhất hiển thị phải là số lượng lớn nhất ở MỘT chi nhánh bất kỳ.
+        // Vì hệ thống hiện tại chỉ giao hàng từ 1 chi nhánh cho 1 đơn hàng (không chia nhỏ đơn).
+        $maxStock = \App\Models\TonKhoCuaHang::where('MASP', $masp)->max('SOLUONG_TON');
+        return $maxStock ? $maxStock : 0;
     }
 }

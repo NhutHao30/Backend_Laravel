@@ -23,6 +23,7 @@ class KhachHang extends Model
         'DIACHI',
         'DIEMTICHLUY',
         'USERNAME',
+        'MACUAHANG',
     ];
 
     public function taikhoan()
@@ -53,5 +54,10 @@ class KhachHang extends Model
     public function cuoctrochuyens()
     {
         return $this->hasMany(CuocTroChuyen::class, 'MAKH', 'MAKH');
+    }
+
+    public function cuahang()
+    {
+        return $this->belongsTo(CuaHang::class, 'MACUAHANG', 'MACUAHANG');
     }
 }

@@ -22,6 +22,7 @@ class HdBan extends Model
         'PHUONGTHUCTHANHTOAN',
         'TRANGTHAITHANHTOAN',
         'MAGIAODICH_MOMO',
+        'MACUAHANG',
     ];
 
     public function khachhang()
@@ -37,5 +38,10 @@ class HdBan extends Model
     public function thongtindh()
     {
         return $this->hasOne(ThongTinDh::class, 'MAHD', 'MAHD');
+    }
+
+    public function cuahang()
+    {
+        return $this->belongsTo(CuaHang::class, 'MACUAHANG', 'MACUAHANG');
     }
 }
