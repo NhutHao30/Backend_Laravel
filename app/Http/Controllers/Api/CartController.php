@@ -169,17 +169,92 @@ class CartController extends Controller
             DB::beginTransaction();
 
             $total = 0;
-            // Validate inventory and calculate total
-            foreach ($items as $item) {
-                $sp = SanPham::lockForUpdate()->find($item->MASP);
-                if (!$sp || $sp->SOLUONG < $item->SOLUONG) {
-                    throw new \Exception("Sản phẩm {$item->MASP} không đủ tồn kho.");
+            
+            // Tìm cửa hàng có đủ hàng cho TẤT CẢ sản phẩm trong giỏ
+            $cuahangs = \App\Models\CuaHang::where('TRANGTHAI', 'Đang hoạt động')->get();
+            $eligibleStores = [];
+            
+            foreach ($cuahangs as $ch) {
+                $isEnoughStock = true;
+                foreach ($items as $item) {
+                    $tonKho = \App\Models\TonKhoCuaHang::where('MACUAHANG', $ch->MACUAHANG)
+                                ->where('MASP', $item->MASP)->first();
+                    if (!$tonKho || $tonKho->SOLUONG_TON < $item->SOLUONG) {
+                        $isEnoughStock = false;
+                        break;
+                    }
                 }
-                $total += $item->SOLUONG * $item->DonGia;
+                if ($isEnoughStock) {
+                    $eligibleStores[] = $ch;
+                }
+            }
+
+            if (empty($eligibleStores)) {
+                throw new \Exception("Hiện tại không có cửa hàng nào còn đủ hàng cho toàn bộ giỏ hàng của bạn.");
+            }
+
+            $selectedStoreId = null;
+            $minFee = -1;
+
+            // GHN API Token
+            $ghnToken = env('GHN_API_TOKEN');
+
+            // Tính cước phí để chọn cửa hàng gần nhất (cước phí rẻ nhất = gần nhất)
+            foreach ($eligibleStores as $ch) {
+                $fee = 999999; // Default max fee
+                $shopId = $ch->GHN_SHOP_ID ?? env('GHN_SHOP_ID'); // Fallback to default if not set
                 
-                // Trừ tồn kho thủ công (không dựa vào Trigger nữa để đảm bảo chính xác)
-                $sp->SOLUONG -= $item->SOLUONG;
-                $sp->save();
+                if ($shopId) {
+                    try {
+                        $response = \Illuminate\Support\Facades\Http::withoutVerifying()->withHeaders([
+                            'Token' => $ghnToken,
+                            'ShopId' => (int)$shopId
+                        ])->post('https://online-gateway.ghn.vn/shiip/public-api/v2/shipping-order/fee', [
+                            'service_type_id' => 2,
+                            'to_ward_code' => (string)$request->to_ward_code,
+                            'to_district_id' => (int)$request->to_district_id,
+                            'weight' => 1000,
+                            'length' => 20,
+                            'width' => 20,
+                            'height' => 10
+                        ]);
+                        $feeData = $response->json();
+                        if (isset($feeData['code']) && $feeData['code'] === 200 && isset($feeData['data']['total'])) {
+                            $fee = $feeData['data']['total'];
+                        }
+                    } catch (\Exception $e) {
+                        // Ignore error, keep fee at 999999
+                    }
+                }
+
+                if ($minFee === -1 || $fee < $minFee) {
+                    $minFee = $fee;
+                    $selectedStoreId = $ch->MACUAHANG;
+                }
+            }
+
+            if (!$selectedStoreId) {
+                $selectedStoreId = $eligibleStores[0]->MACUAHANG; // Fallback
+            }
+
+            // Trừ tồn kho tại cửa hàng được chọn và tính tổng tiền
+            foreach ($items as $item) {
+                $tonKho = \App\Models\TonKhoCuaHang::where('MACUAHANG', $selectedStoreId)
+                            ->where('MASP', $item->MASP)->lockForUpdate()->first();
+                
+                \Illuminate\Support\Facades\DB::table('tonkho_cuahang')
+                    ->where('MACUAHANG', $selectedStoreId)
+                    ->where('MASP', $item->MASP)
+                    ->update(['SOLUONG_TON' => $tonKho->SOLUONG_TON - $item->SOLUONG]);
+                
+                // (Tùy chọn) Vẫn trừ bảng sanpham để tương thích ngược nếu Frontend đang đọc từ bảng này
+                $sp = SanPham::find($item->MASP);
+                if ($sp) {
+                    $sp->SOLUONG -= $item->SOLUONG;
+                    $sp->save();
+                }
+
+                $total += $item->SOLUONG * $item->DonGia;
             }
 
             $mahd = $request->mahd ?? ('HD' . substr(time(), -8));
@@ -198,6 +273,7 @@ class CartController extends Controller
                 'MAKH' => $cart->MAKH,
                 'MAVANDON' => $mavandon,
                 'DonViVanChuyen' => 'Giao Hàng Nhanh',
+                'MACUAHANG' => $selectedStoreId,
             ]);
 
             // Chuyển chi tiết giỏ hàng sang chi tiết hóa đơn

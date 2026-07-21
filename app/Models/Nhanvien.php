@@ -13,6 +13,7 @@ class NhanVien extends Model
 
     protected $fillable = [
         'USERNAME',
+        'CCCD',
         'HOTEN',
         'NGAYSINH',
         'GioiTinh',
@@ -20,6 +21,11 @@ class NhanVien extends Model
         'SDT',
         'CHUCVU',
         'LUONG',
+        'CCCD_TRUOC',
+        'CCCD_SAU',
+        'TRANGTHAI',
+        'CALAMVIEC',
+        'MACUAHANG',
     ];
 
     public function taikhoan()
@@ -35,5 +41,10 @@ class NhanVien extends Model
     public function cuoctrochuyens()
     {
         return $this->hasMany(CuocTroChuyen::class, 'USERNAME_NV', 'USERNAME');
+    }
+
+    public function cuahang()
+    {
+        return $this->belongsTo(CuaHang::class, 'MACUAHANG', 'MACUAHANG');
     }
 }

@@ -54,9 +54,18 @@ class PushOrderToGhnJob implements ShouldQueue
         $paymentTypeId = $isCOD ? 2 : 1; // 2: Thu hộ, 1: Không thu hộ
         $codAmount = $isCOD ? (int) $invoice->TONGTIEN : 0;
 
+        // Lấy ShopId của chi nhánh
+        $shopId = env('GHN_SHOP_ID');
+        if ($invoice->MACUAHANG) {
+            $cuaHang = \App\Models\CuaHang::find($invoice->MACUAHANG);
+            if ($cuaHang && $cuaHang->GHN_SHOP_ID) {
+                $shopId = $cuaHang->GHN_SHOP_ID;
+            }
+        }
+
         $ghnResponse = Http::withoutVerifying()->withHeaders([
             'Token' => env('GHN_API_TOKEN'),
-            'ShopId' => env('GHN_SHOP_ID')
+            'ShopId' => (int)$shopId
         ])->post('https://online-gateway.ghn.vn/shiip/public-api/v2/shipping-order/create', [
             'payment_type_id' => $paymentTypeId, 
             'note' => $this->addressDisplay,

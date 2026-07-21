@@ -10,6 +10,7 @@ class VaiTro extends Model
     protected $primaryKey = 'MAROLE';
     public $incrementing = false;
     protected $keyType = 'integer';
+    public $timestamps = false;
 
     protected $fillable = [
         'MAROLE',
